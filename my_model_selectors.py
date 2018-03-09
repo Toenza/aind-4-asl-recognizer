@@ -34,7 +34,7 @@ class ModelSelector(object):
     def base_model(self, num_states):
         # with warnings.catch_warnings():
         warnings.filterwarnings("ignore", category=DeprecationWarning)
-        # warnings.filterwarnings("ignore", category=RuntimeWarning)
+        warnings.filterwarnings("ignore", category=RuntimeWarning)
         try:
             hmm_model = GaussianHMM(n_components=num_states, covariance_type="diag", n_iter=1000,
                                     random_state=self.random_state, verbose=False).fit(self.X, self.lengths)
@@ -75,9 +75,32 @@ class SelectorBIC(ModelSelector):
         :return: GaussianHMM object
         """
         warnings.filterwarnings("ignore", category=DeprecationWarning)
+        splits = 3
 
-        # TODO implement model selection based on BIC scores
-        raise NotImplementedError
+        split_method = KFold(random_state=self.random_state, n_splits=splits)
+        best_score = float("-inf")
+        best_model = None
+
+        for n in range(self.min_n_components, self.max_n_components + 1):
+            try:
+                model = self.base_model(n)
+                log_likelihood = model.score(self.X, self.lengths)
+                d = len(self.X[0])
+                # I have zero idea why this is like that and why we need to figure this out on our own
+                # but according to https://ai-nd.slack.com/files/ylu/F4S90AJFR/number_of_parameters_in_bic.txt
+                # the number of parameters is n^2 + 2*d*n - 1 (where d is the #features and n #states in the HMM)
+                n_params = n**2 + 2*d*n - 1
+                N = len(self.X)
+
+                # BIC = -2 * logL + p * logN     (source: http://www2.imm.dtu.dk/courses/02433/doc/ch6_slides.pdf)
+                BIC = -2 * log_likelihood + n_params * np.log(N)
+                if BIC < best_score:
+                    best_score = BIC
+                    best_model = model
+            except Exception as e:
+                continue
+
+        return best_model if best_model is not None else self.base_model(self.n_constant)
 
 
 class SelectorDIC(ModelSelector):
@@ -105,29 +128,29 @@ class SelectorCV(ModelSelector):
     def select(self):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
         splits = 3
-        if len(self.sequences) < splits:
-            return None
 
         split_method = KFold(random_state=self.random_state, n_splits=splits)
         best_score = float("-inf")
         best_model = None
 
-        for n_components in range(self.min_n_components, self.max_n_components + 1):
-            scores = []
-            model = None
-            log_likelihood = None
-            for cv_train_idx, cv_test_idx in split_method.split(self.sequences):
-                train_set, lengths_train = combine_sequences(cv_train_idx, self.sequences)
-                test_set, lengths_test = combine_sequences(cv_test_idx, self.sequences)
-                try:
-                    model = GaussianHMM(n_components=n_components, covariance_type="diag", n_iter=1000,
-                                        random_state=self.random_state, verbose=False).fit(train_set, lengths_train)
-                    log_likelihood = model.score(test_set, lengths_test)
-                    scores.append(log_likelihood)
-                except Exception as e:
-                    break
+        if len(self.sequences) >= splits:
+            for n_components in range(self.min_n_components, self.max_n_components + 1):
+                scores = []
+                model = None
+                log_likelihood = None
+                for cv_train_idx, cv_test_idx in split_method.split(self.sequences):
+                    train_set, lengths_train = combine_sequences(cv_train_idx, self.sequences)
+                    test_set, lengths_test = combine_sequences(cv_test_idx, self.sequences)
+                    try:
+                        model = GaussianHMM(n_components=n_components, covariance_type="diag", n_iter=1000,
+                                            random_state=self.random_state, verbose=False).fit(train_set, lengths_train)
+                        log_likelihood = model.score(test_set, lengths_test)
+                        scores.append(log_likelihood)
+                    except Exception as e:
+                        break
 
-            average_score = np.average(scores) if len(scores) > 0 else float("-inf")
-            if average_score > best_score:
-                best_score, best_model = average_score, model
+                average_score = np.average(scores) if len(scores) > 0 else float("-inf")
+                if average_score > best_score:
+                    best_score, best_model = average_score, model
+
         return best_model if best_model is not None else self.base_model(self.n_constant)
