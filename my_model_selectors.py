@@ -116,9 +116,45 @@ class SelectorDIC(ModelSelector):
     def select(self):
         warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-        # TODO implement model selection based on DIC scores
-        raise NotImplementedError
+        models = {}
+        likelihoods = {}
 
+        for n_components in range(self.min_n_components, self.max_n_components + 1):
+            n_models = {}
+            n_likelihoods = {}
+
+            for word in self.words.keys():
+                X, lengths = self.hwords[word]
+                try:
+                    model = GaussianHMM(n_components=n_components, covariance_type="diag", n_iter=1000,
+                                            random_state=self.random_state, verbose=False).fit(train_set, lengths_train)
+                    log_likelihood = model.score(X, lengths)
+                    n_models[word] = model
+                    n_likelihoods[word] = log_likelihood
+                except Exception as e:
+                    continue
+
+            models[n_components] = n_models
+            likelihoods[n_components] = n_likelihoods
+
+        best_model = None
+        best_score = float("-inf")
+
+        for n_components in range(self.min_n_components, self.max_n_components + 1):
+            model = models[n_components]
+            likelihood = likelihoods[n_components]
+
+            if self.this_word not in likelihood:
+                continue
+
+            other_words = [likelihood[word] for word in likelihood.keys() if word != self.this_word]
+            DIC = likelihood[self.this_word] - np.mean(other_words)
+
+            if DIC > best_score:
+                best_model = model[self.this_word]
+                best_score = DIC
+
+        return best_model if best_model is not None else self.base_model(self.n_constant)
 
 class SelectorCV(ModelSelector):
     ''' select best model based on average log Likelihood of cross-validation folds
